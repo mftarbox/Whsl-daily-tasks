@@ -18,7 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mondayGraphQL, mondayUploadFile, getAssets, findItemByExactName } from './lib/monday.js';
 import { runSuiteQL, getRecord, getSalesOrderLines } from './lib/netsuite.js';
-import { sendSlackAlert, sendSlackBlocks } from './lib/slack.js';
+import { sendSlackAlert, uploadFileToSlack, postSlackMessage } from './lib/slack.js';
 import { isManualRun, isEightPmMountain } from './lib/schedule.js';
 import { getWholesaleWipItems, WHOLESALE_WIP_BOARD, COL_ADD_TO_NUORDER, COL_REWORK_CHECKBOX } from './lib/wholesale-wip.js';
 
@@ -39,6 +39,8 @@ const L10_PERSON_COLUMN = 'person';
 // lib/wholesale-wip.js) - Wholesale WIP's own Image column is a read-only mirror of it.
 const WIP2027_BOARD = 18388071004;
 const COL_WIP2027_IMAGE = 'files2__1'; // WIP2027's real Image column
+
+const WHOLESALE_DROPS_CHANNEL_ID = 'C0C42NW52QH'; // #wholesale-drops
 
 const CATALOG_BOARD = 18381819120; // "Wholesale Catalog/NuOrder L10"
 const CATALOG_REMOVE_GROUP = 'group_mkxssj5e'; // "Catalog Changes/Updates"
@@ -450,13 +452,25 @@ function escapeSlackText(value) {
   return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Pulls the first image (if any) off WIP2027's real Image column for inline display in the
-// digest Slack post - one product photo per item, not the full gallery. Mirrors the same
-// file-list parsing nuorder-imagery-export.js uses for this column. Returns null (Slack just
-// omits the image for that item) on no linked WIP2027 item, no image, or any fetch failure - a
-// missing photo shouldn't block the digest from going out. Unlike the old email attachment
-// version, this just needs the presigned URL (Slack fetches it directly) - no download/re-upload.
-async function getDropImageUrl(wip2027Id) {
+// Pulls the first image (if any) off WIP2027's real Image column and uploads it into Slack
+// itself for inline display in the digest post - one product photo per item, not the full
+// gallery. Mirrors the same file-list parsing nuorder-imagery-export.js uses for this column.
+// Returns null (Slack just omits the image for that item) on no linked WIP2027 item, no image,
+// or any fetch/upload failure - a missing photo shouldn't block the digest from going out.
+//
+// CHANGED 2026-09-24 (Shelly's request: "is there anyway to get the imagery to post w/ the slack
+// message?" - it wasn't). This originally just passed Monday's `assets(ids:).public_url`
+// straight through as a Block Kit `image_url`, which looked right (confirmed live that the URL
+// really is publicly fetchable with the correct Content-Type) but never actually rendered -
+// Monday's public_url is a temporary S3 presigned link valid only ~1 hour, long expired by the
+// time anyone opens the digest, and is hard-coded with `Content-Disposition: attachment` (tells
+// a client to download, not display inline). Slack's own guidance is not to embed presigned/
+// temporary URLs like that at all - upload the file directly to Slack instead. So this now
+// downloads the image bytes (the same `fetch(asset.public_url)` pattern the original, since-
+// removed email version used) and uploads them into Slack via `uploadFileToSlack()`, returning a
+// Slack file id for `buildDropDigestSlackBlocks()` to reference via `slack_file` instead of
+// `image_url`. See lib/slack.js for the full upload-flow writeup.
+async function getDropImageSlackFileId(wip2027Id, masterSku) {
   if (!wip2027Id) return null;
   try {
     const data = await mondayGraphQL(
@@ -474,9 +488,15 @@ async function getDropImageUrl(wip2027Id) {
     if (files.length === 0) return null;
 
     const [asset] = await getAssets([String(files[0].assetId)]);
-    return asset?.public_url || null;
+    if (!asset) return null;
+
+    const res = await fetch(asset.public_url);
+    if (!res.ok) return null;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const filename = asset.name || `${masterSku}${asset.file_extension || ''}`;
+    return await uploadFileToSlack(buffer, filename);
   } catch (err) {
-    console.warn(`  Could not fetch drop image URL (WIP2027 item ${wip2027Id}): ${err.message}`);
+    console.warn(`  Could not fetch/upload drop image for Master SKU ${masterSku} (WIP2027 item ${wip2027Id}): ${err.message}`);
     return null;
   }
 }
@@ -502,8 +522,8 @@ function buildDropDigestSlackBlocks(entries) {
           text: `*${escapeSlackText(item.masterSku)}*\n${escapeSlackText(item.printTitle || '(no print title on file)')}`,
         },
       };
-      if (item.imageUrl) {
-        section.accessory = { type: 'image', image_url: item.imageUrl, alt_text: item.printTitle || item.masterSku };
+      if (item.slackFileId) {
+        section.accessory = { type: 'image', slack_file: { id: item.slackFileId }, alt_text: item.printTitle || item.masterSku };
       }
       blocks.push(section);
     }
@@ -531,7 +551,7 @@ async function sendDropDigestToSlack(entries) {
   for (let i = 0; i < bodyBlocks.length; i += CHUNK_SIZE) {
     const chunk = bodyBlocks.slice(i, i + CHUNK_SIZE);
     const blocks = i === 0 ? [{ type: 'header', text: { type: 'plain_text', text: headerText } }, ...chunk] : chunk;
-    await sendSlackBlocks(headerText, blocks);
+    await postSlackMessage(WHOLESALE_DROPS_CHANNEL_ID, headerText, blocks);
   }
   console.log(`  Posted drop digest to #wholesale-drops (${entries.length} item(s)).`);
 }
@@ -645,7 +665,7 @@ async function main() {
       masterSku: item.masterSku,
       printTitle: item.printTitle,
       productType: item.productType,
-      imageUrl: await getDropImageUrl(item.wip2027Id),
+      slackFileId: await getDropImageSlackFileId(item.wip2027Id, item.masterSku),
     });
 
     try {

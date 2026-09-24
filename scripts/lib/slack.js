@@ -1,15 +1,19 @@
-// Minimal Slack Incoming Webhook client. Two independent uses, two independent webhooks:
-//   - sendSlackAlert: error/fatal alerts to #whsl_ops_workflow_alerts (SLACK_ALERTS_WEBHOOK_URL).
-//   - sendSlackBlocks: the Feature 3 drop digest to #wholesale-drops (WHOLESALE_DROPS_SLACK_WEBHOOK_URL).
-// Slack Incoming Webhooks are bound to one fixed channel at creation, so a second destination
-// channel needs its own webhook URL/secret rather than a runtime parameter - see
-// WHOLESALE_DROPS_SLACK_WEBHOOK_URL below.
+// Slack client. Two independent delivery mechanisms for two independent uses:
+//   - sendSlackAlert: error/fatal alerts to #whsl_ops_workflow_alerts, via a plain Incoming
+//     Webhook (SLACK_ALERTS_WEBHOOK_URL) - text only, never throws (see below).
+//   - uploadFileToSlack / postSlackMessage: the Feature 3 drop digest to #wholesale-drops, via
+//     Slack's Web API with a bot token (SLACK_BOT_TOKEN) - see the 2026-09-24 note below for why
+//     this isn't also a plain webhook.
 //
-// Neither function should ever throw - a Slack outage or misconfigured webhook should never be
-// able to take down the actual automation run. Failures here are only ever logged to the console.
+// sendSlackAlert should never throw - a Slack outage or misconfigured webhook should never be
+// able to take down the actual automation run; failures there are only ever logged. The bot-token
+// functions below are different on purpose: they DO throw on failure, same as any other
+// Monday/NetSuite call in this codebase, so the caller's own try/catch (see
+// sendDropDigestToSlack in dropped-alert.js) can log + sendSlackAlert about it like every other
+// non-fatal failure path.
 
 const ALERTS_WEBHOOK_URL = process.env.SLACK_ALERTS_WEBHOOK_URL;
-const DROPS_WEBHOOK_URL = process.env.WHOLESALE_DROPS_SLACK_WEBHOOK_URL;
+const BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
 async function postToSlackWebhook(webhookUrl, payload, { envVarName, label }) {
   if (!webhookUrl) {
@@ -44,15 +48,69 @@ export async function sendSlackAlert(message, { fatal = false, source = 'Wholesa
   await postToSlackWebhook(ALERTS_WEBHOOK_URL, { text }, { envVarName: 'SLACK_ALERTS_WEBHOOK_URL', label: 'Slack alert' });
 }
 
-// Added 2026-09-23 (Shelly's request) for Feature 3: posts a Block Kit message - built by the
-// caller (see buildDropDigestSlackBlocks in dropped-alert.js) - to #wholesale-drops instead of the
-// error-alerts channel. `text` is the required Block Kit fallback/notification text, `blocks` is
-// the full block array (already chunked to <=50 blocks per call by the caller, since Slack rejects
-// a single message with more than that).
-export async function sendSlackBlocks(text, blocks) {
-  await postToSlackWebhook(
-    DROPS_WEBHOOK_URL,
-    { text, blocks },
-    { envVarName: 'WHOLESALE_DROPS_SLACK_WEBHOOK_URL', label: 'drop digest Slack post' },
-  );
+function requireBotToken() {
+  if (!BOT_TOKEN) {
+    throw new Error('SLACK_BOT_TOKEN not set');
+  }
+  return BOT_TOKEN;
+}
+
+// Slack's Web API always returns HTTP 200 even on a logical failure - the real signal is the
+// `ok` field in the JSON body, with `error` giving the reason. Confirmed via Slack's own docs
+// (2026-09-24) that this applies to every method used below.
+async function callSlackApi(method, { json, formData } = {}) {
+  const token = requireBotToken();
+  const res = await fetch(`https://slack.com/api/${method}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(json ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: json ? JSON.stringify(json) : formData,
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(`Slack API ${method} failed: ${JSON.stringify(data)}`);
+  }
+  return data;
+}
+
+// Added 2026-09-24 (Shelly's request: "is there anyway to get the imagery to post w/ the slack
+// message?"). The original approach - passing Monday's `assets(ids:).public_url` straight through
+// as a Block Kit `image_url` - looked right (confirmed live via curl that the URL is genuinely
+// publicly fetchable, correct Content-Type, well under Slack's 3000-char URL limit) but never
+// actually rendered. Root cause: that URL is a temporary S3 presigned link, valid only ~1 hour
+// (Monday's own schema says so) - by the time anyone actually opens the digest message, it's
+// long expired. It's also hard-coded by Monday with `Content-Disposition: attachment`, which
+// tells any client "download this," not "display inline" - Slack's own developer blog
+// specifically warns against embedding presigned/temporary URLs this way and recommends
+// uploading the file directly to Slack instead (the `slack_file` block property), so this
+// downloads the image bytes (same fetch(asset.public_url) pattern the original email version
+// used) and uploads them into Slack itself via the standard three-step external-upload flow:
+// files.getUploadURLExternal -> PUT the bytes to the returned upload_url -> files.completeUploadExternal
+// (no channel_id passed - per Slack's docs, omitting it just hosts the file privately in Slack,
+// which is exactly what's needed to reference it via `slack_file: { id }` in a message posted
+// separately, without also creating a redundant standalone file-share message in the channel).
+// Needs the `files:write` bot scope.
+export async function uploadFileToSlack(buffer, filename) {
+  const { upload_url: uploadUrl, file_id: fileId } = await callSlackApi('files.getUploadURLExternal', {
+    formData: new URLSearchParams({ filename, length: String(buffer.length) }),
+  });
+
+  const uploadRes = await fetch(uploadUrl, { method: 'POST', body: buffer });
+  if (!uploadRes.ok) {
+    throw new Error(`Slack file upload PUT failed (${uploadRes.status}): ${await uploadRes.text()}`);
+  }
+
+  await callSlackApi('files.completeUploadExternal', { json: { files: [{ id: fileId, title: filename }] } });
+  return fileId;
+}
+
+// Posts a Block Kit message via chat.postMessage instead of an Incoming Webhook, since webhooks
+// can't reference `slack_file` images (they're a plain HTTP POST with no bot identity/token
+// behind them for Slack to resolve the file against). Needs the `chat:write` bot scope, and the
+// bot user needs to actually be a member of the destination channel (invited via `/invite
+// @<bot name>` in Slack) - `chat.postMessage` returns a `not_in_channel` error otherwise.
+export async function postSlackMessage(channelId, text, blocks) {
+  await callSlackApi('chat.postMessage', { json: { channel: channelId, text, blocks } });
 }

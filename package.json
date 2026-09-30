@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Daily check: Wholesale WIP styles moved to Dropped -> matching not-fulfilled NetSuite wholesale orders -> Monday pulse on Wholesale Sales L10.",
+  "description": "Wholesale WIP nightly automation: Print Title sync, NuOrder imagery export, Dropped rework alerts, Celigo sync.",
   "scripts": {
-    "start": "node scripts/run.js"
+    "print-titles": "node scripts/sync-print-titles.js",
+    "imagery": "node scripts/nuorder-imagery-export.js",
+    "dropped": "node scripts/dropped-alert.js",
+    "celigo": "node scripts/celigo-sync.js"
   },
   "engines": {
     "node": ">=20"

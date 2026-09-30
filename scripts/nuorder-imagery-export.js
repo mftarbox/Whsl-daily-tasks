@@ -15,18 +15,13 @@
 // images exist" process for every linked item, independent of where that item sits in the NuOrder
 // pipeline - see docs/spec.md decision 26.
 //
-// Split out of the original combined run.js on 2026-09-08 (Shelly's request - see docs/spec.md
-// decision 25) into its own standalone workflow/script, so it can be run (and re-run) on its own
-// - including manually, e.g. right after adding an image to an item that failed export for lack
-// of one - without also re-running the Dropped-rework feature. The Celigo "Monday to NetSuite"
-// sync trigger that used to fire at the end of the combined script now lives in its own
-// celigo-sync.js, chained to run automatically after this workflow completes (see
-// .github/workflows/celigo-sync.yml).
+// Runs as a job inside .github/workflows/nightly.yml (docs/spec.md decision 34), and can still be
+// run by itself from the Actions tab - e.g. right after adding an image to an item that failed
+// export for lack of one.
 
 import { mondayGraphQL, getAssets } from './lib/monday.js';
 import { uploadFile as uploadToDropbox } from './lib/dropbox.js';
 import { sendSlackAlert } from './lib/slack.js';
-import { isManualRun, isEightPmMountain } from './lib/schedule.js';
 import { getWholesaleWipItems, chunk, isChecked } from './lib/wholesale-wip.js';
 
 const SOURCE = 'NuOrder Imagery Export';
@@ -193,13 +188,6 @@ async function processNuOrderImageExports(wipItems) {
 }
 
 async function main() {
-  if (!isManualRun() && !isEightPmMountain()) {
-    // This cron fires twice a day (once for MST, once for MDT) so it always lands on 8pm
-    // Mountain regardless of daylight saving. One of the two ticks is always a no-op by design.
-    console.log('Not 8pm Mountain time right now - skipping this tick.');
-    return;
-  }
-
   console.log('Fetching Wholesale WIP items...');
   const wipItems = await getWholesaleWipItems();
 

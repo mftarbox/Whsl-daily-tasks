@@ -1,0 +1,50 @@
+name: Wholesale WIP Nightly
+
+# The ONE scheduled entry point (docs/spec.md decision 34). Runs every job below, in order, every
+# time - on schedule or when you click "Run workflow". No time-of-day checks, so a late GitHub
+# start just runs late; it never skips.
+#
+#   1. Print Title Sync          - refresh Wholesale WIP Print Title from WIP2027
+#   2. NuOrder Imagery Export    - runs after 1, alongside 3
+#   3. Dropped Rework Alert      - runs after 1, alongside 2
+#   4. Celigo NetSuite Sync      - runs last, after 2 and 3 finish, even if one of them failed
+#
+# Jobs 2-4 still run if an earlier job fails (`if: always()`), so one broken step never blocks
+# the rest of the night.
+
+on:
+  schedule:
+    # 02:00 UTC = 8pm Mountain Daylight / 7pm Mountain Standard (Nov-Mar).
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+
+# Only one nightly run at a time; a second one waits instead of overlapping.
+concurrency:
+  group: wholesale-wip-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  print-titles:
+    uses: ./.github/workflows/print-title-sync.yml
+    secrets: inherit
+
+  imagery:
+    needs: print-titles
+    if: ${{ always() }}
+    uses: ./.github/workflows/nuorder-imagery-export.yml
+    secrets: inherit
+
+  dropped:
+    needs: print-titles
+    if: ${{ always() }}
+    uses: ./.github/workflows/dropped-alert.yml
+    secrets: inherit
+
+  celigo:
+    needs: [imagery, dropped]
+    if: ${{ always() }}
+    uses: ./.github/workflows/celigo-sync.yml
+    secrets: inherit

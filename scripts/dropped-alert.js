@@ -6,12 +6,8 @@
 //   2. Side effect of a drop: a "close these order lines" CSV pulse on Sales Ops L10.
 // Slack alerts fire to #whsl_ops_workflow_alerts on both fatal and per-item/per-order errors.
 //
-// Split out of the original combined run.js on 2026-09-08 (Shelly's request - see docs/spec.md
-// decision 25) into its own standalone workflow/script, so it can run (and be re-run) on its own
-// without also re-running the NuOrder imagery export feature. The Celigo "Monday to NetSuite"
-// sync trigger that used to fire at the end of this same script now lives in its own
-// celigo-sync.js, chained to run automatically after this workflow completes (see
-// .github/workflows/celigo-sync.yml) - this script only writes state/state.json and exits.
+// Runs as a job inside .github/workflows/nightly.yml (docs/spec.md decision 34), after the Print
+// Title sync and before the Celigo sync. It can still be run by itself from the Actions tab.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,13 +15,17 @@ import { fileURLToPath } from 'node:url';
 import { mondayGraphQL, mondayUploadFile, getAssets, findItemByExactName } from './lib/monday.js';
 import { runSuiteQL, getRecord, getSalesOrderLines } from './lib/netsuite.js';
 import { sendSlackAlert, uploadFileToSlack, postSlackMessage } from './lib/slack.js';
-import { isManualRun, isEightPmMountain } from './lib/schedule.js';
 import { getWholesaleWipItems, WHOLESALE_WIP_BOARD, COL_ADD_TO_NUORDER, COL_REWORK_CHECKBOX } from './lib/wholesale-wip.js';
 
 const SOURCE = 'Dropped Rework Alert';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = path.join(__dirname, '..', 'state', 'state.json');
+// Added 2026-09-29 (docs/spec.md decision 36): Wholesale WIP item id -> { notifiedAt } for every
+// drop whose one-time notifications (Add to NuOrder -> Remove, Catalog removal pulse, #wholesale-
+// drops digest) have already gone out. Lets a drop that can't finish (no Master SKU, NetSuite
+// error) retry the order matching on the next run WITHOUT re-posting those notifications.
+const DROPS_PATH = path.join(__dirname, '..', 'state', 'drops.json');
 
 const L10_BOARD = 3552781534;
 const L10_GROUP = 'group_mm1mrkqe'; // "Customer Drops Communication Needed"
@@ -64,6 +64,18 @@ function loadState() {
 
 function saveState(state) {
   fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + '\n');
+}
+
+function loadDrops() {
+  try {
+    return JSON.parse(fs.readFileSync(DROPS_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveDrops(drops) {
+  fs.writeFileSync(DROPS_PATH, JSON.stringify(drops, null, 2) + '\n');
 }
 
 function escapeSql(value) {
@@ -331,6 +343,25 @@ async function markReworkAlertSent(itemId) {
       itemId,
       columnId: COL_REWORK_CHECKBOX,
       value: JSON.stringify({ checked: 'true' }),
+    },
+  );
+}
+
+// Added 2026-09-29 (docs/spec.md decision 36): the reset. Unchecks "Rework Alert Sent" once an
+// item's WHSL Planning Indicator is no longer Dropped, so the style alerts again if it is ever
+// re-dropped. Done here, nightly, rather than by a Monday automation, so an accidental
+// Dropped -> Load and Go -> Dropped toggle within the same day does NOT re-alert the reps.
+async function clearReworkAlertSent(itemId) {
+  await mondayGraphQL(
+    `
+    mutation ($boardId: ID!, $itemId: ID!, $values: JSON!) {
+      change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $values) { id }
+    }
+    `,
+    {
+      boardId: WHOLESALE_WIP_BOARD,
+      itemId,
+      values: JSON.stringify({ [COL_REWORK_CHECKBOX]: null }),
     },
   );
 }
@@ -612,17 +643,27 @@ async function createCatalogRemovalPulse(item) {
 }
 
 async function main() {
-  if (!isManualRun() && !isEightPmMountain()) {
-    // This cron fires twice a day (once for MST, once for MDT) so it always lands on 8pm
-    // Mountain regardless of daylight saving. One of the two ticks is always a no-op by design.
-    console.log('Not 8pm Mountain time right now - skipping this tick.');
-    return;
-  }
-
   const state = loadState();
+  const drops = loadDrops();
 
   console.log('Fetching Wholesale WIP items...');
   const wipItems = await getWholesaleWipItems();
+
+  // --- Reset (decision 36): anything no longer Dropped gets a clean slate ---
+  for (const item of wipItems) {
+    if (item.planningIndicator === 'Dropped') continue;
+    if (drops[item.id]) delete drops[item.id];
+    if (!item.reworkAlertSent) continue;
+    try {
+      await clearReworkAlertSent(item.id);
+      item.reworkAlertSent = false;
+      console.log(`  Reset "Rework Alert Sent" on ${item.name} (WHSL Planning Indicator is now ${item.planningIndicator || 'blank'}).`);
+    } catch (err) {
+      console.error(`  Failed to reset "Rework Alert Sent" on ${item.name}: ${err.message}`);
+      await sendSlackAlert(`Failed to reset "Rework Alert Sent" on "${item.name}": ${err.message}`, { source: SOURCE });
+    }
+  }
+  saveDrops(drops);
 
   const candidates = wipItems.filter((i) => !i.reworkAlertSent);
 
@@ -651,32 +692,45 @@ async function main() {
   for (const item of droppedItems) {
     console.log(`Processing dropped style: ${item.name} (Master SKU ${item.masterSku || '(none)'})`);
 
-    // --- Feature 1: unconditional side effect, fires before everything else below ---
-    try {
-      await setAddToNuOrderToRemove(item.id);
-      console.log(`  Set "Add to NuOrder" to Remove on ${item.name}.`);
-    } catch (err) {
-      console.error(`  Failed to set "Add to NuOrder" to Remove on ${item.name}: ${err.message}`);
-      await sendSlackAlert(`Failed to set "Add to NuOrder" to Remove on "${item.name}": ${err.message}`, { source: SOURCE });
-    }
+    // One-time notifications for this drop (Features 1, 3, 4) - skipped if an earlier run already
+    // sent them and this item is only back because order matching didn't finish (decision 36).
+    if (drops[item.id]) {
+      console.log(`  Notifications already sent on ${drops[item.id].notifiedAt} - retrying order matching only.`);
+    } else {
+      // --- Feature 1: unconditional side effect, fires before everything else below ---
+      try {
+        await setAddToNuOrderToRemove(item.id);
+        console.log(`  Set "Add to NuOrder" to Remove on ${item.name}.`);
+      } catch (err) {
+        console.error(`  Failed to set "Add to NuOrder" to Remove on ${item.name}: ${err.message}`);
+        await sendSlackAlert(`Failed to set "Add to NuOrder" to Remove on "${item.name}": ${err.message}`, { source: SOURCE });
+      }
 
-    // --- Feature 3 accumulator + Feature 4: both unconditional, same timing as Feature 1 ---
-    digestEntries.push({
-      masterSku: item.masterSku,
-      printTitle: item.printTitle,
-      productType: item.productType,
-      slackFileId: await getDropImageSlackFileId(item.wip2027Id, item.masterSku),
-    });
+      // --- Feature 3 accumulator + Feature 4: both unconditional, same timing as Feature 1 ---
+      digestEntries.push({
+        itemId: item.id,
+        masterSku: item.masterSku,
+        printTitle: item.printTitle,
+        productType: item.productType,
+        slackFileId: await getDropImageSlackFileId(item.wip2027Id, item.masterSku),
+      });
 
-    try {
-      await createCatalogRemovalPulse(item);
-    } catch (err) {
-      console.error(`  Failed to create catalog removal pulse for ${item.name}: ${err.message}`);
-      await sendSlackAlert(`Failed to create catalog removal pulse for "${item.name}": ${err.message}`, { source: SOURCE });
+      try {
+        await createCatalogRemovalPulse(item);
+      } catch (err) {
+        console.error(`  Failed to create catalog removal pulse for ${item.name}: ${err.message}`);
+        await sendSlackAlert(`Failed to create catalog removal pulse for "${item.name}": ${err.message}`, { source: SOURCE });
+      }
     }
 
     if (!item.masterSku) {
+      // Left unprocessed on purpose so it retries once a Master SKU exists - but alert every run
+      // so it doesn't sit silently (decision 36).
       console.warn('  Skipping order matching - no Master SKU value found.');
+      await sendSlackAlert(
+        `"${item.name}" is Dropped but has no Master SKU, so its NetSuite orders can't be checked. Fix the Master SKU on WIP2027; it will retry tonight.`,
+        { source: SOURCE },
+      );
       continue;
     }
 
@@ -750,6 +804,9 @@ async function main() {
   if (digestEntries.length > 0) {
     try {
       await sendDropDigestToSlack(digestEntries);
+      const notifiedAt = new Date().toISOString();
+      for (const entry of digestEntries) drops[entry.itemId] = { notifiedAt };
+      saveDrops(drops);
     } catch (err) {
       console.error(`  Failed to post drop digest to Slack: ${err.message}`);
       await sendSlackAlert(`Failed to post drop digest to Slack: ${err.message}`, { source: SOURCE });
@@ -791,6 +848,7 @@ async function main() {
   }
 
   saveState(state);
+  saveDrops(drops);
   console.log('Done.');
 }
 

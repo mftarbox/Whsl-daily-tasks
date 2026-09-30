@@ -1,0 +1,22 @@
+name: Print Title Sync
+
+# Job 1 of "Wholesale WIP Nightly". Can also be run by itself from the Actions tab.
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  print-title-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Print Title Sync
+        env:
+          MONDAY_API_TOKEN: ${{ secrets.MONDAY_API_TOKEN }}
+          SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
+        run: node scripts/sync-print-titles.js

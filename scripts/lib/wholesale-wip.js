@@ -34,6 +34,7 @@ export const COL_PRINT_TITLE = 'text_mm4mef1k'; // Wholesale WIP "Print Title"
 export const COL_PREBOOK = 'boolean_mm7pst6t'; // Wholesale WIP "Prebook" (checkbox)
 export const COL_PREBOOK_START = 'date_mm7p6vgs'; // Wholesale WIP "Prebook Delivery Start Date"
 export const COL_PREBOOK_END = 'date_mm7p4gb4'; // Wholesale WIP "Prebook Delivery End Date"
+export const COL_PREBOOK_REMOVE = 'date_mm7py1xm'; // Wholesale WIP "Remove Prebook Date" (decision 39)
 
 export function isChecked(checkboxColumnValue) {
   if (!checkboxColumnValue) return false;
@@ -71,6 +72,7 @@ export async function getWholesaleWipItems() {
     COL_PREBOOK,
     COL_PREBOOK_START,
     COL_PREBOOK_END,
+    COL_PREBOOK_REMOVE,
   ];
   const rawItems = [];
   let cursor = null;
@@ -139,6 +141,7 @@ export async function getWholesaleWipItems() {
       productType: cv[COL_PRODUCT_TYPE]?.text || null,
       printTitle: cv[COL_PRINT_TITLE]?.text || null,
       hasPrebook: isChecked(cv[COL_PREBOOK]) || !!cv[COL_PREBOOK_START]?.text || !!cv[COL_PREBOOK_END]?.text,
+      prebookRemoveDate: cv[COL_PREBOOK_REMOVE]?.text || null, // YYYY-MM-DD or null
     };
   });
 }

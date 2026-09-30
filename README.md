@@ -14,9 +14,10 @@ Full design history and platform gotchas: [`docs/spec.md`](docs/spec.md).
 | 1 | Print Title Sync | Copies WIP2027 **Shopify Title** onto Wholesale WIP **Print Title** when it changed. Never blanks a title. |
 | 2 | NuOrder Imagery Export | Every item whose WIP2027 **NuOrder Images Exported** box is unchecked: uploads its WIP2027 images to Dropbox `/NuOrder Imagery/{Master SKU}-01…`, then checks the box. |
 | 3 | Dropped Rework Alert | Items with **WHSL Planning Indicator = Dropped** and **Rework Alert Sent** unchecked: Add to NuOrder → Remove, Catalog/NuOrder L10 "Remove" item, #wholesale-drops post, NetSuite open-order match → Sales Ops L10 close-items CSV + Wholesale Sales L10 item per order, then checks Rework Alert Sent. Also resets Rework Alert Sent on anything no longer Dropped. |
-| 4 | Celigo NetSuite Sync | Runs Celigo "Monday → NetSuite" (NuOrder Active on/off from Add to NuOrder), then "NetSuite Item → NuOrder Product & Size". |
+| 4 | Prebook Expiry | Items whose **Remove Prebook Date** is today or earlier (Mountain) and still on Prebook: unchecks Prebook, clears the three Prebook dates, sets Add to NuOrder → Update. |
+| 5 | Celigo NetSuite Sync | Runs Celigo "Monday → NetSuite" (NuOrder Active on/off from Add to NuOrder), then "NetSuite Item → NuOrder Product & Size". |
 
-Jobs 2 and 3 run side by side after 1. Job 4 runs last. Every job runs even if an earlier one
+Jobs 2, 3 and 4 run side by side after 1. Job 5 runs last. Every job runs even if an earlier one
 failed. Errors post to **#whsl_ops_workflow_alerts**.
 
 ## Running things by hand
@@ -24,7 +25,7 @@ failed. Errors post to **#whsl_ops_workflow_alerts**.
 Actions tab → pick a workflow → **Run workflow**.
 
 - **Wholesale WIP Nightly** — everything, in order. Use this by default.
-- **Print Title Sync / NuOrder Imagery Export / Dropped Rework Alert / Celigo NetSuite Sync** — just
+- **Print Title Sync / NuOrder Imagery Export / Dropped Rework Alert / Prebook Expiry / Celigo NetSuite Sync** — just
   that one job. Handy after fixing a single problem (e.g. an image added). Run Celigo afterwards if
   you changed Add to NuOrder.
 

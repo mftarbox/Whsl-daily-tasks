@@ -1,0 +1,23 @@
+name: Prebook Expiry
+
+# Part of "Wholesale WIP Nightly" (runs after Print Title Sync, before Celigo). Can also be run
+# by itself from the Actions tab.
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  prebook-expiry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Prebook Expiry
+        env:
+          MONDAY_API_TOKEN: ${{ secrets.MONDAY_API_TOKEN }}
+          SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
+        run: node scripts/prebook-expiry.js

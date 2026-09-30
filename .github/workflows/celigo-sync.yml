@@ -1,6 +1,6 @@
 name: Celigo NetSuite Sync
 
-# Job 4 (last) of "Wholesale WIP Nightly". Can also be run by itself from the Actions tab.
+# Last job of "Wholesale WIP Nightly". Can also be run by itself from the Actions tab.
 on:
   workflow_call: {}
   workflow_dispatch: {}

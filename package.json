@@ -8,7 +8,8 @@
     "print-titles": "node scripts/sync-print-titles.js",
     "imagery": "node scripts/nuorder-imagery-export.js",
     "dropped": "node scripts/dropped-alert.js",
-    "celigo": "node scripts/celigo-sync.js"
+    "celigo": "node scripts/celigo-sync.js",
+    "prebook-expiry": "node scripts/prebook-expiry.js"
   },
   "engines": {
     "node": ">=20"

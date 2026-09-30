@@ -15,7 +15,15 @@ import { fileURLToPath } from 'node:url';
 import { mondayGraphQL, mondayUploadFile, getAssets, findItemByExactName } from './lib/monday.js';
 import { runSuiteQL, getRecord, getSalesOrderLines } from './lib/netsuite.js';
 import { sendSlackAlert, uploadFileToSlack, postSlackMessage } from './lib/slack.js';
-import { getWholesaleWipItems, WHOLESALE_WIP_BOARD, COL_ADD_TO_NUORDER, COL_REWORK_CHECKBOX } from './lib/wholesale-wip.js';
+import {
+  getWholesaleWipItems,
+  WHOLESALE_WIP_BOARD,
+  COL_ADD_TO_NUORDER,
+  COL_REWORK_CHECKBOX,
+  COL_PREBOOK,
+  COL_PREBOOK_START,
+  COL_PREBOOK_END,
+} from './lib/wholesale-wip.js';
 
 const SOURCE = 'Dropped Rework Alert';
 
@@ -343,6 +351,24 @@ async function markReworkAlertSent(itemId) {
       itemId,
       columnId: COL_REWORK_CHECKBOX,
       value: JSON.stringify({ checked: 'true' }),
+    },
+  );
+}
+
+// Added 2026-09-30 (docs/spec.md decision 37): a wholesale drop clears Prebook. Replaces the
+// WIP2027 automation that cleared WIP2027's Prebook fields on WIP2027's Planning Indicator.
+// NetSuite's NuOrder Prebook fields are cleared separately by Celigo's "Remove" step.
+async function clearPrebook(itemId) {
+  await mondayGraphQL(
+    `
+    mutation ($boardId: ID!, $itemId: ID!, $values: JSON!) {
+      change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $values) { id }
+    }
+    `,
+    {
+      boardId: WHOLESALE_WIP_BOARD,
+      itemId,
+      values: JSON.stringify({ [COL_PREBOOK]: null, [COL_PREBOOK_START]: null, [COL_PREBOOK_END]: null }),
     },
   );
 }
@@ -691,6 +717,17 @@ async function main() {
 
   for (const item of droppedItems) {
     console.log(`Processing dropped style: ${item.name} (Master SKU ${item.masterSku || '(none)'})`);
+
+    // Prebook clear (decision 37) - runs every time until it sticks; a no-op once cleared.
+    if (item.hasPrebook) {
+      try {
+        await clearPrebook(item.id);
+        console.log(`  Cleared Prebook and Prebook dates on ${item.name}.`);
+      } catch (err) {
+        console.error(`  Failed to clear Prebook on ${item.name}: ${err.message}`);
+        await sendSlackAlert(`Failed to clear Prebook on dropped item "${item.name}": ${err.message}`, { source: SOURCE });
+      }
+    }
 
     // One-time notifications for this drop (Features 1, 3, 4) - skipped if an earlier run already
     // sent them and this item is only back because order matching didn't finish (decision 36).

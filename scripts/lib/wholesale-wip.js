@@ -29,6 +29,12 @@ export const COL_PLANNING_INDICATOR = 'color_mm79m1dk'; // Wholesale WIP "WHSL P
 export const COL_PRODUCT_TYPE = 'text_mm4mg5an'; // Wholesale WIP "Product Type"
 export const COL_PRINT_TITLE = 'text_mm4mef1k'; // Wholesale WIP "Print Title"
 
+// Added 2026-09-30 (docs/spec.md decision 37): Prebook moved off WIP2027 onto real Wholesale WIP
+// columns. Celigo's NuOrder Gate Sync reads these; the Dropped Rework Alert clears them.
+export const COL_PREBOOK = 'boolean_mm7pst6t'; // Wholesale WIP "Prebook" (checkbox)
+export const COL_PREBOOK_START = 'date_mm7p6vgs'; // Wholesale WIP "Prebook Delivery Start Date"
+export const COL_PREBOOK_END = 'date_mm7p4gb4'; // Wholesale WIP "Prebook Delivery End Date"
+
 export function isChecked(checkboxColumnValue) {
   if (!checkboxColumnValue) return false;
   if (typeof checkboxColumnValue.checked === 'boolean') return checkboxColumnValue.checked;
@@ -62,6 +68,9 @@ export async function getWholesaleWipItems() {
     COL_PLANNING_INDICATOR,
     COL_PRODUCT_TYPE,
     COL_PRINT_TITLE,
+    COL_PREBOOK,
+    COL_PREBOOK_START,
+    COL_PREBOOK_END,
   ];
   const rawItems = [];
   let cursor = null;
@@ -129,6 +138,7 @@ export async function getWholesaleWipItems() {
       planningIndicator: cv[COL_PLANNING_INDICATOR]?.text || null,
       productType: cv[COL_PRODUCT_TYPE]?.text || null,
       printTitle: cv[COL_PRINT_TITLE]?.text || null,
+      hasPrebook: isChecked(cv[COL_PREBOOK]) || !!cv[COL_PREBOOK_START]?.text || !!cv[COL_PREBOOK_END]?.text,
     };
   });
 }

@@ -191,20 +191,19 @@ function buildNetSuiteOrderUrl(soInternalId) {
 // Builds the rich comment posted to the pulse (both on first creation and on every later
 // append) - see docs/spec.md decision 15. Only reflects drops found in *this* run, per Shelly's
 // call on 2026-08-07 (not a full cumulative history across every past alert on this order).
-function buildCommentBody({ orderNumber, customerName, soInternalId, skuRows, variantRows }) {
-  const skuLines = skuRows.map((r) => `${r.masterSku} | ${r.shopifyTitle}`).join('<br>');
-  const variantLines = variantRows.map((r) => `${r.size} | ${r.qtyOrdered}`).join('<br>');
-  return [
-    `<b>Order:</b> ${orderNumber}`,
-    `<b>Customer:</b> ${customerName}`,
-    `<b>NetSuite Sales Order:</b> ${buildNetSuiteOrderUrl(soInternalId)}`,
-    '',
-    '<b>Dropped Master SKU | Shopify Title</b>',
-    skuLines,
-    '',
-    '<b>Variant Size | Qty Ordered</b>',
-    variantLines,
-  ].join('<br>');
+// CHANGED 2026-10-07 (docs/spec.md decision 40): sizes are now grouped under the SKU they belong
+// to. The old layout listed every SKU in one block and every size in a second block, so with two
+// or more dropped SKUs on one order there was no way to tell which sizes went with which SKU.
+function buildCommentBody({ orderNumber, customerName, soInternalId, skuGroups }) {
+  const lines = [
+    `<b>Order:</b> ${orderNumber} &nbsp;·&nbsp; <b>Customer:</b> ${customerName}`,
+    `<a href="${buildNetSuiteOrderUrl(soInternalId)}">View sales order in NetSuite</a>`,
+  ];
+  for (const g of skuGroups) {
+    const sizes = g.variants.map((v) => `${v.size}: ${v.qtyOrdered}`).join(' &nbsp;·&nbsp; ');
+    lines.push('', `<b>${g.masterSku} — ${g.shopifyTitle}</b>`, `Qty ordered &nbsp;→&nbsp; ${sizes}`);
+  }
+  return lines.join('<br>');
 }
 
 async function getCustomerName(customerId) {
@@ -782,7 +781,12 @@ async function main() {
       if (!agg.skuMap.has(row.master_sku)) {
         agg.skuMap.set(row.master_sku, { shopifyTitle: details.shopifyTitle });
       }
-      agg.variantRows.push({ size: details.size, qtyOrdered: row.qty_ordered, position: details.position });
+      agg.variantRows.push({
+        masterSku: row.master_sku,
+        size: details.size,
+        qtyOrdered: row.qty_ordered,
+        position: details.position,
+      });
 
       const lineDetails = await resolveOrderLineDetails(row.so_internal_id, row.item_id, lineQueueCache);
       if (lineDetails) {
@@ -840,17 +844,17 @@ async function main() {
         console.warn(`  No Monday user found for email ${email} - pulse will be created with no assignee.`);
       }
 
-      const skuRows = [...agg.skuMap.entries()].map(([masterSku, v]) => ({
+      const sortedVariants = [...agg.variantRows].sort((a, b) => a.position - b.position);
+      const skuGroups = [...agg.skuMap.entries()].map(([masterSku, v]) => ({
         masterSku,
         shopifyTitle: v.shopifyTitle,
+        variants: sortedVariants.filter((r) => r.masterSku === masterSku),
       }));
-      const variantRows = [...agg.variantRows].sort((a, b) => a.position - b.position);
       const commentBody = buildCommentBody({
         orderNumber,
         customerName,
         soInternalId: agg.soInternalId,
-        skuRows,
-        variantRows,
+        skuGroups,
       });
 
       await createOrUpdatePulse(

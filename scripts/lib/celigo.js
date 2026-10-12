@@ -51,3 +51,41 @@ export async function runCeligoFlow(flowId) {
   }
   return data;
 }
+
+// Added 2026-10-12 (docs/spec.md decision 40): "run" only QUEUES a flow - it returns right away
+// with a job id while Celigo does the work in the background. To run one flow strictly after
+// another, poll the first flow's job until it finishes.
+const FINISHED_STATUSES = new Set(['completed', 'failed', 'canceled', 'cancelled']);
+
+async function celigoGet(path) {
+  const apiToken = requireEnv('CELIGO_API_TOKEN');
+  const res = await fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${apiToken}` } });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Celigo GET ${path} failed (${res.status}): ${text.slice(0, 300)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+// Finds the job a run call started: by the returned _jobId, or (fallback) the newest flow job for
+// this flow created at/after the trigger time.
+async function findJob(flowId, jobId, triggeredAt) {
+  if (jobId) return celigoGet(`/v1/jobs/${jobId}`);
+  const jobs = await celigoGet(`/v1/jobs?_flowId=${flowId}&type=flow`);
+  const list = Array.isArray(jobs) ? jobs : [];
+  return list.find((j) => new Date(j.createdAt).getTime() >= triggeredAt - 60_000) || null;
+}
+
+export async function runCeligoFlowAndWait(flowId, { timeoutMs = 45 * 60_000, intervalMs = 15_000 } = {}) {
+  const triggeredAt = Date.now();
+  const run = await runCeligoFlow(flowId);
+  const jobId = run?._jobId || run?._id || null;
+  const deadline = triggeredAt + timeoutMs;
+  let job = null;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    job = await findJob(flowId, jobId, triggeredAt);
+    if (job && FINISHED_STATUSES.has(String(job.status).toLowerCase())) {
+      return { job, timedOut: false };
+    }
+  }
+  return { job, timedOut: true };
+}

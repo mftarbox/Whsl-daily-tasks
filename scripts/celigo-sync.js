@@ -11,7 +11,7 @@
 // or 8pm-Mountain gate. This runs as the LAST job of .github/workflows/nightly.yml, once, after
 // every other job has finished (success or failure), so it always sees the final "Add to NuOrder"
 // values for the night. It can still be run by itself from the Actions tab.
-import { runCeligoFlow } from './lib/celigo.js';
+import { runCeligoFlow, runCeligoFlowAndWait } from './lib/celigo.js';
 import { sendSlackAlert } from './lib/slack.js';
 
 const SOURCE = 'Celigo NetSuite Sync';
@@ -26,16 +26,32 @@ const CELIGO_MONDAY_TO_NETSUITE_FLOW_ID = '6a7520cb8d2dd2212253f91d';
 const CELIGO_NETSUITE_ITEM_TO_NUORDER_FLOW_ID = '66e07296960e3ef4199b3c02';
 
 async function main() {
-  // Never throws past these - a Celigo failure shouldn't affect this workflow's exit code, same
-  // convention as every other non-fatal error path across all three scripts (log + Slack alert
-  // only, per Shelly's call). Each flow is wrapped independently so one failing doesn't block or
-  // mask the other.
+  // Never throws past these - a Celigo failure only logs + Slack-alerts. Each flow has its own
+  // try/catch so one failing doesn't block the other.
+  // Flow 1 must FINISH before flow 2 starts (decision 40): flow 2 reads NetSuite items, and flow 1
+  // is what updates them. A Celigo "run" only queues the flow, so wait on its job. Flow 2 still
+  // runs if flow 1 fails or takes too long, so NuOrder gets whatever did land.
   try {
-    await runCeligoFlow(CELIGO_MONDAY_TO_NETSUITE_FLOW_ID);
-    console.log('Triggered Celigo Monday-to-NetSuite sync flow.');
+    const { job, timedOut } = await runCeligoFlowAndWait(CELIGO_MONDAY_TO_NETSUITE_FLOW_ID);
+    if (timedOut) {
+      console.warn('Monday-to-NetSuite flow still running after 45 min - starting the NuOrder flow anyway.');
+      await sendSlackAlert('Celigo Monday-to-NetSuite flow was still running after 45 minutes; started the NuOrder flow anyway.', {
+        source: SOURCE,
+      });
+    } else {
+      console.log(
+        `Monday-to-NetSuite flow finished: ${job.status} (${job.numSuccess || 0} succeeded, ${job.numError || 0} errors).`,
+      );
+      if (String(job.status).toLowerCase() !== 'completed' || job.numError) {
+        await sendSlackAlert(
+          `Celigo Monday-to-NetSuite flow finished as "${job.status}" with ${job.numError || 0} error(s). Check its run history in Celigo.`,
+          { source: SOURCE },
+        );
+      }
+    }
   } catch (err) {
-    console.error(`Failed to trigger Celigo Monday-to-NetSuite sync flow: ${err.message}`);
-    await sendSlackAlert(`Failed to trigger Celigo Monday-to-NetSuite sync flow: ${err.message}`, { source: SOURCE });
+    console.error(`Celigo Monday-to-NetSuite sync flow failed: ${err.message}`);
+    await sendSlackAlert(`Celigo Monday-to-NetSuite sync flow failed: ${err.message}`, { source: SOURCE });
   }
 
   try {

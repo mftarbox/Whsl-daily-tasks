@@ -1,0 +1,50 @@
+{
+  "13075040733": {
+    "name": "SHN-1629",
+    "masterSku": "10447-1629",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  },
+  "13075020936": {
+    "name": "SHN-0212_A",
+    "masterSku": "80070-0212",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  },
+  "13075071466": {
+    "name": "SHN-2131",
+    "masterSku": "10428-2131",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  },
+  "13075035170": {
+    "name": "SHN-0383_A",
+    "masterSku": "80070-0383",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  },
+  "13075021413": {
+    "name": "SHN-1629",
+    "masterSku": "10176-1629",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  },
+  "13075017294": {
+    "name": "SHN-0469_A",
+    "masterSku": "80070-0469",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  },
+  "13075017293": {
+    "name": "SHN-0469_A",
+    "masterSku": "10428-0469",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  },
+  "13075021414": {
+    "name": "SHN-1629",
+    "masterSku": "10398-1629",
+    "error": "No images found on linked WIP2027 item",
+    "alertedAt": "2026-11-03T08:47:52.000Z"
+  }
+}

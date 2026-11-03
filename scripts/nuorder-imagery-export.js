@@ -19,12 +19,36 @@
 // run by itself from the Actions tab - e.g. right after adding an image to an item that failed
 // export for lack of one.
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { mondayGraphQL, getAssets } from './lib/monday.js';
 import { uploadFile as uploadToDropbox } from './lib/dropbox.js';
 import { sendSlackAlert } from './lib/slack.js';
 import { getWholesaleWipItems, chunk, isChecked } from './lib/wholesale-wip.js';
 
 const SOURCE = 'NuOrder Imagery Export';
+
+// CHANGED 2026-11-03 (Shelly's request): alert ONCE per failing item instead of every night.
+// state/imagery-alerts.json records, per WIP2027 item id, the error that was already posted to
+// Slack. Same item + same error on a later run = log only, no Slack post. The entry is removed
+// when the export succeeds (or the item is no longer a pending target), so a later failure alerts
+// again. A different error on the same item (e.g. an image was added but its download failed)
+// also alerts again. Committed back to the repo by the workflow, like state/state.json.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ALERTS_PATH = path.join(__dirname, '..', 'state', 'imagery-alerts.json');
+
+function loadAlerts() {
+  try {
+    return JSON.parse(fs.readFileSync(ALERTS_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveAlerts(alerts) {
+  fs.writeFileSync(ALERTS_PATH, JSON.stringify(alerts, null, 2) + '\n');
+}
 
 const WIP2027_BOARD = 18388071004;
 const COL_WIP2027_IMAGE = 'files2__1'; // WIP2027 Image column (the real field - see lib/wholesale-wip.js note)
@@ -148,6 +172,8 @@ async function processNuOrderImageExports(wipItems) {
 
   console.log(`Checking imagery export status for ${targets.length} linked item(s)...`);
   const exportState = await getWip2027ImageExportState(targets.map((t) => t.wip2027Id));
+  const alerts = loadAlerts();
+  const stillFailing = new Set();
 
   for (const target of targets) {
     const state = exportState[target.wip2027Id];
@@ -174,17 +200,38 @@ async function processNuOrderImageExports(wipItems) {
     try {
       await exportImagesToDropbox(target, state.files);
       await markImagesExported(target.wip2027Id);
+      delete alerts[target.wip2027Id];
       console.log(
         `  Exported ${state.files.length} image(s) for ${target.name} (Master SKU ${target.masterSku}) to Dropbox and marked as exported.`,
       );
     } catch (err) {
       console.error(`  Failed to export imagery for ${target.name}: ${err.message}`);
+      stillFailing.add(String(target.wip2027Id));
+      const prior = alerts[target.wip2027Id];
+      if (prior && prior.error === err.message) {
+        console.log(`    Already alerted on ${prior.alertedAt} - not posting to Slack again.`);
+        continue;
+      }
       await sendSlackAlert(
-        `Failed to export NuOrder imagery for "${target.name}" (Master SKU ${target.masterSku || '(none)'}): ${err.message}`,
+        `Failed to export NuOrder imagery for "${target.name}" (Master SKU ${target.masterSku || '(none)'}): ${err.message}` +
+          '\n_This alert posts once. Add an image to the WIP2027 item and it will export on the next run._',
         { source: SOURCE },
       );
+      alerts[target.wip2027Id] = {
+        name: target.name,
+        masterSku: target.masterSku,
+        error: err.message,
+        alertedAt: new Date().toISOString(),
+      };
     }
   }
+
+  // Drop entries for items that aren't failing anymore (exported, image added, unlinked, etc.)
+  // so a future failure on them alerts again.
+  for (const id of Object.keys(alerts)) {
+    if (!stillFailing.has(id)) delete alerts[id];
+  }
+  saveAlerts(alerts);
 }
 
 async function main() {

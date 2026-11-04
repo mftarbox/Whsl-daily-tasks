@@ -17,6 +17,8 @@ Full design history and platform gotchas: [`docs/spec.md`](docs/spec.md).
 | 4 | Prebook Expiry | Items whose **Remove Prebook Date** is today or earlier (Mountain) and still on Prebook: unchecks Prebook, clears the three Prebook dates, sets Add to NuOrder → Update. |
 | 5 | Celigo NetSuite Sync | Runs Celigo "Monday → NetSuite" (NuOrder Active on/off from Add to NuOrder), then "NetSuite Item → NuOrder Product & Size". |
 
+Separate schedule (not part of the nightly run): **SRBD vs SED Check** — weekdays 13:41 UTC (7:41am Central in winter, 8:41am in summer), after NetSuite's 1:00 AM allocation run. Finds open wholesale SO lines whose Supply Required By Date doesn't match the Sales Effective Date and posts them to **#wholesale_orders_issues** with a ready-to-run Import Assistant file (`srbd-sed-fix.csv`; also saved as a run artifact for 14 days). Read-only against NetSuite.
+
 Jobs 2, 3 and 4 run side by side after 1. Job 5 runs last. Every job runs even if an earlier one
 failed. Errors post to **#whsl_ops_workflow_alerts**.
 
@@ -25,6 +27,7 @@ failed. Errors post to **#whsl_ops_workflow_alerts**.
 Actions tab → pick a workflow → **Run workflow**.
 
 - **Wholesale WIP Nightly** — everything, in order. Use this by default.
+- **SRBD vs SED Check** — run any time to get the current mismatch list posted.
 - **Print Title Sync / NuOrder Imagery Export / Dropped Rework Alert / Prebook Expiry / Celigo NetSuite Sync** — just
   that one job. Handy after fixing a single problem (e.g. an image added). Run Celigo afterwards if
   you changed Add to NuOrder.
@@ -41,4 +44,4 @@ Actions tab → pick a workflow → **Run workflow**.
 
 `MONDAY_API_TOKEN`, `NETSUITE_ACCOUNT_ID`, `NETSUITE_CONSUMER_KEY`, `NETSUITE_CONSUMER_SECRET`,
 `NETSUITE_TOKEN_ID`, `NETSUITE_TOKEN_SECRET`, `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`,
-`DROPBOX_REFRESH_TOKEN`, `CELIGO_API_TOKEN`, `SLACK_ALERTS_WEBHOOK_URL`, `WHOLESALE_DROPS_SLACK_WEBHOOK_URL`
+`DROPBOX_REFRESH_TOKEN`, `CELIGO_API_TOKEN`, `SLACK_ALERTS_WEBHOOK_URL`, `WHOLESALE_DROPS_SLACK_WEBHOOK_URL`, `WHOLESALE_ORDER_ISSUES_SLACK_WEBHOOK_URL` (Incoming Webhook bound to #wholesale_orders_issues, for SRBD vs SED Check)

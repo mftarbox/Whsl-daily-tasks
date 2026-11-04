@@ -1,0 +1,44 @@
+name: SRBD vs SED Check
+
+# Weekdays after NetSuite's 1:00 AM Central allocation run. Posts open wholesale SO lines whose
+# Supply Required By Date doesn't match the Sales Effective Date to #wholesale_orders_issues, with
+# a ready-to-run Import Assistant file. Read-only against NetSuite. docs/spec.md decision 42.
+# Not part of "Wholesale WIP Nightly" - that runs at 8pm, before the allocation run.
+on:
+  schedule:
+    # 13:41 UTC = 7:41am Central Standard (Nov-Mar) / 8:41am Central Daylight. Mon-Fri.
+    - cron: '41 13 * * 1-5'
+  workflow_dispatch: {}
+
+concurrency:
+  group: srbd-sed-check
+  cancel-in-progress: false
+
+jobs:
+  srbd-sed-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run SRBD vs SED Check
+        env:
+          NETSUITE_ACCOUNT_ID: ${{ secrets.NETSUITE_ACCOUNT_ID }}
+          NETSUITE_CONSUMER_KEY: ${{ secrets.NETSUITE_CONSUMER_KEY }}
+          NETSUITE_CONSUMER_SECRET: ${{ secrets.NETSUITE_CONSUMER_SECRET }}
+          NETSUITE_TOKEN_ID: ${{ secrets.NETSUITE_TOKEN_ID }}
+          NETSUITE_TOKEN_SECRET: ${{ secrets.NETSUITE_TOKEN_SECRET }}
+          SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
+          WHOLESALE_ORDER_ISSUES_SLACK_WEBHOOK_URL: ${{ secrets.WHOLESALE_ORDER_ISSUES_SLACK_WEBHOOK_URL }}
+        run: node scripts/srbd-sed-check.js
+
+      - name: Save import file
+        if: ${{ always() && hashFiles('srbd-sed-fix.csv') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: srbd-sed-fix
+          path: srbd-sed-fix.csv
+          retention-days: 14

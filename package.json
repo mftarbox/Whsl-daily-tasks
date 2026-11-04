@@ -9,7 +9,8 @@
     "imagery": "node scripts/nuorder-imagery-export.js",
     "dropped": "node scripts/dropped-alert.js",
     "celigo": "node scripts/celigo-sync.js",
-    "prebook-expiry": "node scripts/prebook-expiry.js"
+    "prebook-expiry": "node scripts/prebook-expiry.js",
+    "srbd-sed-check": "node scripts/srbd-sed-check.js"
   },
   "engines": {
     "node": ">=20"
